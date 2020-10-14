@@ -1,0 +1,78 @@
+Import-Module PSSQLite
+ 
+ 
+ 
+##################  DEFINITIONS ###################################
+$regex = [regex] "\d+\.\d+\.\d+\.\d+"
+$logfile = "C:\Firewall\blocked.log"
+(Get-Date).ToString() + ' Start Script'  >> $logfile
+$Database = "C:\Firewall\IPTable.sqlite"
+$MaxFailedLogon = 3 # NB d'echec d'authentification MAX
+$Unban = 1 # NB d'heure avant débannissement 
+ 
+$query_insert = "INSERT INTO IP (IP, Timestamp) VALUES (@IP, @TS)"
+$query_MaxFailed = "SELECT IP,Timestamp, COUNT(*) FROM IP GROUP BY IP HAVING COUNT(*) > @MAXFAILED"
+$query_purge = "DELETE FROM IP where TimeStamp < @TS"
+ 
+
+ 
+##################  DETECTION DE L'EVENT 140 ###################################
+$DT = [DateTime]::Now.AddSeconds(-120)
+(Get-Date).ToString() + ' requete Event ' + ($DT).ToString()   >> $logfile
+$af = Get-WinEvent   -FilterHashTable @{ LogName = "Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational"; ID = 131} -MaxEvents 1 | select-string -inputobject {$_.message} -Pattern $regex  |% { $_.Matches } |Select-Object @{n='ClientIP';e={$_.Value} }  
+
+$getip = $af | group-object -property ClientIP | Select-Object -property Name
+# Purge des IP bannies 
+(Get-Date).ToString() + ' Purge des IP'  >> $logfile
+Invoke-SqliteQuery -DataSource $Database -Query $query_purge -SqlParameters @{
+    TS = ((get-date).AddHours((-$Unban)))
+}
+    
+# Suppression des lignes ayant une IP nulle
+Invoke-SqliteQuery -DataSource $Database -Query "DELETE FROM IP WHERE ip is null"
+ 
+ 
+$fw = New-Object -ComObject hnetcfg.fwpolicy2
+ 
+$BlackListRule = $fw.rules | where { $_.name -eq 'BLACK LIST' }
+$IPValue = $getip | where { $_.Name.Length -gt 1 }
+ 
+#Ajout des IPs dans Sqlite
+if (($IPValue.name).Length -gt 1) {
+    (Get-Date).ToString() + ' Ajout IP Base ' + $IPValue.name  >> $logfile
+    Invoke-SqliteQuery -DataSource $Database -Query $query_insert -SqlParameters @{
+        IP = $IPValue.name
+        TS = (get-date)
+    }    
+}
+ 
+ 
+##################  OPERATIONS dans FIREWALL ###################################
+ 
+$fw = New-Object -ComObject hnetcfg.fwpolicy2
+$BlackListRule = $fw.rules | Where-Object { $_.name -eq 'BLACK LIST' }
+ 
+#Construction de la nouvelle liste d'ip blacklistées 'Liste ip séparateur virgules)
+ 
+$ListeIP = "" 
+ 
+(Get-Date).ToString() + ' Construction de la Blacklist IP'  >> $logfile
+$collectionIP = Invoke-SqliteQuery -DataSource $Database -Query $query_MaxFailed -SqlParameters @{ MAXFAILED = $MaxFailedLogon }
+ 
+foreach ($IP in $collectionIP) {
+    if ($ListeIP.Length -gt 0) { $ListeIP = $ListeIP += ',' + $IP.IP }
+    else { $ListeIP = $IP.IP }               
+}
+ 
+ 
+if ($ListeIP.length -gt 1) {
+    # Anti lockout
+    $ListeIP = $ListeIP += ',127.0.0.1'
+    $BlackListRule.RemoteAddresses = $ListeIP
+    $ListeIP | % { (Get-Date).ToString() + ' Ajout de IP Firewall ' + $IPValue.name >> $logfile }
+}
+ 
+# modification de la règle FW
+ 
+
+exit

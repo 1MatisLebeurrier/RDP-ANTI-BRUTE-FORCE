@@ -1,0 +1,4 @@
+Import-Module PSSQLite
+$Database = " C:\Firewall\IPTable.SQLite.db "
+$Query = " CREATE TABLE IP (IP VARCHAR(20),Timestamp DATETIME) "
+Invoke-SqliteQuery -Query $Query -DataSource $Database

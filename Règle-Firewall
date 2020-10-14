@@ -1,0 +1,1 @@
+New-NetFirewallRule -DisplayName "BLACK LIST" -Direction Inbound -LocalPort 3389 -Protocol TCP -RemoteAddress "8.8.8.8" -Action Block
